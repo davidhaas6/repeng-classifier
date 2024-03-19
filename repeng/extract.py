@@ -136,16 +136,32 @@ def read_representations(
     # the order is [positive, negative, positive, negative, ...]
     train_strs = [s for ex in inputs for s in (ex.positive, ex.negative)]
 
-    layer_hiddens = batched_get_hiddens(
+    layer_hiddens, sample_mapping = batched_get_hiddens(
         model, tokenizer, train_strs, hidden_layers, batch_size
     )
 
-    # get differences between (positive, negative) pairs
+    # Initialize dictionary to hold differences between positive and negative pairs for each layer
     relative_layer_hiddens = {}
+
     for layer in hidden_layers:
-        relative_layer_hiddens[layer] = (
-            layer_hiddens[layer][::2] - layer_hiddens[layer][1::2]
-        )
+        # Create lists to hold the hidden states for positive and negative samples
+        positives = []
+        negatives = []
+        
+        # Iterate over each sample and classify it as positive or negative based on its label in sample_mapping
+        for idx, sample_id in enumerate(sample_mapping):
+
+            if sample_mapping[sample_id] == 'positive':
+                positives.append(layer_hiddens[layer][idx])
+            else:
+                negatives.append(layer_hiddens[layer][idx])
+          
+        positives_array = np.array(positives)
+        negatives_array = np.array(negatives)
+        
+        # Ensure there is a matching number of positive and negative samples before subtraction
+        min_len = min(len(positives_array), len(negatives_array))
+        relative_layer_hiddens[layer] = np.array(positives)[:min_len] - np.array(negatives)[:min_len]
 
     # get directions for each layer using PCA
     directions: dict[int, np.ndarray] = {}
@@ -219,11 +235,13 @@ def batched_get_hiddens(
             for entry in batch:
                 sample_mapping[entry.sampleId] = entry.label
 
+            # pull the layers for the 
             for layer in hidden_layers:
                 # if not indexing from end, account for embedding hiddens
                 hidden_idx = layer + 1 if layer >= 0 else layer
                 for batch in outputs.hidden_states[hidden_idx]:
-                    hidden_states[layer].append(batch[-1, :].squeeze().cpu().numpy())
+                    states = batch[-1, :].squeeze().cpu().numpy()
+                    hidden_states[layer].append(states)
             del outputs
     
     return {k: np.vstack(v) for k, v in hidden_states.items()}, sample_mapping
