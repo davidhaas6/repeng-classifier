@@ -189,34 +189,44 @@ def read_representations(
 def batched_get_hiddens(
     model,
     tokenizer,
-    inputs: list[str],
+    dataset: list[DatasetEntry],
     hidden_layers: list[int],
     batch_size: int,
-) -> dict[int, np.ndarray]:
+) -> tuple[dict[int, np.ndarray], dict[str, str]]:
     """
-    Using the given model and tokenizer, pass the inputs through the model and get the hidden
+    Using the given model and tokenizer, pass the pre-generated completions through the model and get the hidden
     states for each layer in `hidden_layers` for the last token.
 
-    Returns a dictionary from `hidden_layers` layer id to an numpy array of shape `(n_inputs, hidden_dim)`
+    Returns a tuple containing:
+    - A dictionary from `hidden_layers` layer id to a numpy array of shape `(n_inputs, hidden_dim)`
+    - A dictionary mapping the sampleId to the corresponding label (correct/incorrect)
     """
-    batched_inputs = [
-        inputs[p : p + batch_size] for p in range(0, len(inputs), batch_size)
+    batched_dataset = [
+        dataset[p : p + batch_size] for p in range(0, len(dataset), batch_size)
     ]
     hidden_states = {layer: [] for layer in hidden_layers}
+    sample_mapping = {}
+
     with torch.no_grad():
-        for batch in tqdm.tqdm(batched_inputs):
-            out = model(
-                **tokenizer(batch, padding=True, return_tensors="pt").to(model.device),
+        for batch in tqdm.tqdm(batched_dataset):
+            batch_completions = [entry.completion for entry in batch]
+            input_ids = tokenizer(batch_completions, padding=True, return_tensors="pt").to(model.device)
+            outputs = model(
+                input_ids,
                 output_hidden_states=True,
             )
+
+            for entry in batch:
+                sample_mapping[entry.sampleId] = entry.label
+
             for layer in hidden_layers:
                 # if not indexing from end, account for embedding hiddens
                 hidden_idx = layer + 1 if layer >= 0 else layer
-                for batch in out.hidden_states[hidden_idx]:
+                for batch in outputs.hidden_states[hidden_idx]:
                     hidden_states[layer].append(batch[-1, :].squeeze().cpu().numpy())
-            del out
-
-    return {k: np.vstack(v) for k, v in hidden_states.items()}
+            del outputs
+    
+    return {k: np.vstack(v) for k, v in hidden_states.items()}, sample_mapping
 
 
 def project_onto_direction(H, direction):
